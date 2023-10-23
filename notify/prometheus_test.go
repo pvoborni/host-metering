@@ -105,14 +105,17 @@ func TestNotify(t *testing.T) {
 	cfg.WriteUrl = server.URL + writeUrlPath
 
 	// Test that notify returns no error
-	err := n.Notify(samples, hostinfo)
-	checkError(t, err, "Failed to notify")
+	result := n.Notify(samples, hostinfo)
+	checkError(t, result.Err(), "Failed to notify")
 	checkCalled(t, called, 1)
+	if result.Status != StatusOK {
+		t.Fatalf("Expected status OK, got %d", result.Status)
+	}
 
 	// Test that http client is still the same after next request
 	httpClient := n.client
-	err = n.Notify(samples, hostinfo)
-	checkError(t, err, "Failed to notify")
+	result = n.Notify(samples, hostinfo)
+	checkError(t, result.Err(), "Failed to notify")
 	if httpClient != n.client {
 		t.Fatalf("Expected client to be reused")
 	}
@@ -120,8 +123,8 @@ func TestNotify(t *testing.T) {
 
 	// Test that http client is recreated when host info changes
 	n.HostChanged()
-	err = n.Notify(samples, hostinfo)
-	checkError(t, err, "Failed to notify")
+	result = n.Notify(samples, hostinfo)
+	checkError(t, result.Err(), "Failed to notify")
 
 	if httpClient == n.client {
 		t.Fatalf("Expected client to be recreated")
@@ -140,9 +143,9 @@ func TestNotifyNoCert(t *testing.T) {
 	samples := createSamples()
 	hostinfo := createHostInfo()
 
-	err := n.Notify(samples, hostinfo)
+	result := n.Notify(samples, hostinfo)
 
-	if !strings.Contains(err.Error(), "no such file or directory") {
+	if !strings.Contains(result.Error(), "no such file or directory") {
 		t.Fatal("Expected error on not finding certicate")
 	}
 }
@@ -169,9 +172,9 @@ func TestNotifyRequestError(t *testing.T) {
 	defer server.Close()
 	cfg.WriteUrl = server.URL + writeUrlPath
 
-	err := n.Notify(samples, hostinfo)
-	if err == nil {
-		t.Fatal("Expected error on request failure")
+	result := n.Notify(samples, hostinfo)
+	if result.Status == StatusOK {
+		t.Fatal("Expected error status on request failure")
 	}
 	if called != 1 {
 		t.Fatalf("Expected to call server once, got %d", called)
@@ -210,16 +213,18 @@ func TestRetriesAndBackoff(t *testing.T) {
 	request, _ := http.NewRequest("POST", cfg.WriteUrl, nil)
 
 	// Test that retries are done as expected and it will fail
-	err := prometheusRemoteWrite(client, cfg, request)
+	err, recoverable := prometheusRemoteWrite(client, cfg, request)
 	if err == nil {
 		t.Fatal("Expected error on request failure")
 	}
+	checkRecoverable(t, recoverable)
 	checkCalled(t, called, int(cfg.WriteRetryAttempts))
 
 	// Test that retries are done as expected and it will succeed
 	called = 0
 	cfg.WriteRetryAttempts = 3
-	err = prometheusRemoteWrite(client, cfg, request)
+	err, recoverable = prometheusRemoteWrite(client, cfg, request)
+	checkRecoverable(t, recoverable)
 	checkError(t, err, "Failed to send request")
 }
 
@@ -258,17 +263,19 @@ func TestNoRetriesOn4xx(t *testing.T) {
 	request, _ := http.NewRequest("POST", cfg.WriteUrl, nil)
 
 	// Test that retries are done as expected and it will fail
-	err := prometheusRemoteWrite(client, cfg, request)
+	err, recoverable := prometheusRemoteWrite(client, cfg, request)
+	checkNonRecoverable(t, recoverable)
 	checkExpectedErrorContains(t, err, "Http Error: 400")
 	checkCalled(t, called, 1)
 
 	// Test that retries are done on 429 but not on subsequest 404
-	err = prometheusRemoteWrite(client, cfg, request)
+	err, recoverable = prometheusRemoteWrite(client, cfg, request)
+	checkNonRecoverable(t, recoverable)
 	checkExpectedErrorContains(t, err, "Http Error: 404")
 	checkCalled(t, called, 1+2)
 
 	// Last request is 200 and that should succeed without retries
-	err = prometheusRemoteWrite(client, cfg, request)
+	err, _ = prometheusRemoteWrite(client, cfg, request)
 	checkError(t, err, "Failed to send request")
 	checkCalled(t, called, 1+2+1)
 }
@@ -369,6 +376,20 @@ func checkExpectedErrorContains(t *testing.T, err error, message string) {
 	}
 	if !strings.Contains(err.Error(), message) {
 		t.Fatalf("unexpected error message: '%s' != '%s'", err.Error(), message)
+	}
+}
+
+func checkRecoverable(t *testing.T, recoverable bool) {
+	t.Helper()
+	if !recoverable {
+		t.Fatalf("Expected error to be recoverable")
+	}
+}
+
+func checkNonRecoverable(t *testing.T, recoverable bool) {
+	t.Helper()
+	if recoverable {
+		t.Fatalf("Expected error to be non-recoverable")
 	}
 }
 

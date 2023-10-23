@@ -34,18 +34,25 @@ func NewPrometheusNotifier(cfg *config.Config) *PrometheusNotifier {
 	}
 }
 
-func (n *PrometheusNotifier) Notify(samples []prompb.Sample, hostinfo *hostinfo.HostInfo) error {
+func (n *PrometheusNotifier) Notify(samples []prompb.Sample, hostinfo *hostinfo.HostInfo) *NotifyResult {
 	if !n.validClient || n.client == nil {
 		if err := n.createHttpClient(); err != nil {
-			return err
+			return RecoverableErrorResult(err)
 		}
 		n.validClient = true
 	}
 	request, err := newPrometheusRequest(hostinfo, n.cfg, samples)
 	if err != nil {
-		return err
+		return RecoverableErrorResult(err)
 	}
-	return prometheusRemoteWrite(n.client, n.cfg, request)
+	err, recoverable := prometheusRemoteWrite(n.client, n.cfg, request)
+	if err == nil {
+		return OKResult()
+	}
+	if recoverable {
+		return RecoverableErrorResult(err)
+	}
+	return NonRecoverableErrorResult(err)
 }
 
 func (n *PrometheusNotifier) HostChanged() {
@@ -80,7 +87,7 @@ func newMTLSHttpClient(keypair tls.Certificate, timeout time.Duration) (*http.Cl
 	}, nil
 }
 
-func prometheusRemoteWrite(httpClient *http.Client, cfg *config.Config, httpRequest *http.Request) error {
+func prometheusRemoteWrite(httpClient *http.Client, cfg *config.Config, httpRequest *http.Request) (err error, recoverable bool) {
 	var attempt uint = 0
 	maxRetryWait := cfg.WriteRetryMaxInt
 	retryWait := cfg.WriteRetryMinInt
@@ -89,11 +96,11 @@ func prometheusRemoteWrite(httpClient *http.Client, cfg *config.Config, httpRequ
 		resp, err := httpClient.Do(httpRequest)
 
 		if err != nil {
-			return fmt.Errorf("PrometheusRemoteWrite: %w", err)
+			return fmt.Errorf("PrometheusRemoteWrite: %w", err), true
 		}
 		defer resp.Body.Close()
 		if resp.StatusCode/100 == 2 {
-			return nil // success
+			return nil, true // success
 		}
 		body, err := io.ReadAll(resp.Body)
 		if err == nil {
@@ -112,12 +119,12 @@ func prometheusRemoteWrite(httpClient *http.Client, cfg *config.Config, httpRequ
 			continue
 		}
 		if resp.StatusCode/100 == 4 {
-			return fmt.Errorf("PrometheusRemoteWrite: Http Error: %d, failing", resp.StatusCode)
+			return fmt.Errorf("PrometheusRemoteWrite: Http Error: %d, failing", resp.StatusCode), false
 		}
-		return fmt.Errorf("PrometheusRemoteWrite: Unexpected Http Status: %d", resp.StatusCode)
+		return fmt.Errorf("PrometheusRemoteWrite: Unexpected Http Status: %d", resp.StatusCode), false
 	}
 
-	return fmt.Errorf("PrometheusRemoteWrite: Failed after %d attempts", attempt)
+	return fmt.Errorf("PrometheusRemoteWrite: Failed after %d attempts", attempt), true
 }
 
 func newPrometheusRequest(hostinfo *hostinfo.HostInfo, cfg *config.Config, samples []prompb.Sample) (

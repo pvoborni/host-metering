@@ -7,8 +7,44 @@ import (
 	"github.com/prometheus/prometheus/prompb"
 )
 
+type NotifyStatus int
+
+const (
+	StatusOK NotifyStatus = iota
+	StatusRecoverableError
+	StatusNonRecoverableError
+)
+
+type NotifyResult struct {
+	Status NotifyStatus
+	err    error
+}
+
+func (e *NotifyResult) Err() error {
+	return e.err
+}
+
+func (e *NotifyResult) Error() string {
+	if e.err == nil {
+		return ""
+	}
+	return e.err.Error()
+}
+
+func OKResult() *NotifyResult {
+	return &NotifyResult{StatusOK, nil}
+}
+
+func RecoverableErrorResult(err error) *NotifyResult {
+	return &NotifyResult{StatusRecoverableError, err}
+}
+
+func NonRecoverableErrorResult(err error) *NotifyResult {
+	return &NotifyResult{StatusNonRecoverableError, err}
+}
+
 type Notifier interface {
-	Notify(samples []prompb.Sample, hostinfo *hostinfo.HostInfo) error
+	Notify(samples []prompb.Sample, hostinfo *hostinfo.HostInfo) *NotifyResult
 
 	// HostChanged tells notifier that related information on host has changed
 	HostChanged()

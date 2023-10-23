@@ -370,10 +370,10 @@ type notifyArgs struct {
 type mockNotifier struct {
 	calledWith       *notifyArgs
 	hostChangedTimes uint
-	result           func(samples []prompb.Sample, hostinfo *hostinfo.HostInfo) error
+	result           func(samples []prompb.Sample, hostinfo *hostinfo.HostInfo) *notify.NotifyResult
 }
 
-func (n *mockNotifier) Notify(samples []prompb.Sample, hostinfo *hostinfo.HostInfo) error {
+func (n *mockNotifier) Notify(samples []prompb.Sample, hostinfo *hostinfo.HostInfo) *notify.NotifyResult {
 	n.calledWith = &notifyArgs{samples, hostinfo}
 	return n.result(samples, hostinfo)
 }
@@ -401,14 +401,14 @@ func (n *mockNotifier) CheckWasNotCalled(t *testing.T) {
 }
 
 func (n *mockNotifier) ExpectError(err error) {
-	n.result = func(samples []prompb.Sample, hostinfo *hostinfo.HostInfo) error {
-		return err
+	n.result = func(samples []prompb.Sample, hostinfo *hostinfo.HostInfo) *notify.NotifyResult {
+		return notify.RecoverableErrorResult(err)
 	}
 }
 
 func (n *mockNotifier) ExpectSuccess() {
-	n.result = func(samples []prompb.Sample, hostinfo *hostinfo.HostInfo) error {
-		return nil
+	n.result = func(samples []prompb.Sample, hostinfo *hostinfo.HostInfo) *notify.NotifyResult {
+		return notify.OKResult()
 	}
 }
 
