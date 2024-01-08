@@ -116,6 +116,14 @@ if [ $1 -eq 0 ]; then
     %selinux_relabel_post -s %{selinuxtype}
 fi
 
+%posttrans selinux
+if [ $1 -le 1 ] ; then
+    /bin/systemctl is-enabled host-metering.service >/dev/null 2>&1
+    if [  $? -eq 0 ]; then
+        /bin/systemctl restart host-metering.service >/dev/null || :
+    fi
+fi
+
 %files
 %doc README.md
 %{_bindir}/*
